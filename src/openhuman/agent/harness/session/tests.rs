@@ -255,6 +255,7 @@ fn set_connected_integrations_marks_session_initialized_and_updates_hash() {
             toolkit: "gmail".into(),
             description: "Email".into(),
             tools: vec![],
+            gated_tools: vec![],
             connected: true,
         },
     ]);

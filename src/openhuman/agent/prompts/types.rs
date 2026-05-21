@@ -89,6 +89,10 @@ pub struct ConnectedIntegration {
     pub description: String,
     /// Per-action catalogue (only populated when `connected == true`).
     pub tools: Vec<ConnectedIntegrationTool>,
+    /// Per-action catalogue for actions that exist on the toolkit but are
+    /// currently hidden from the callable tool surface by user scope
+    /// preferences.
+    pub gated_tools: Vec<GatedIntegrationTool>,
     /// Whether the user has an active OAuth connection for this
     /// toolkit. When `false`, the toolkit is in the backend allowlist
     /// but no authorization has been completed yet — `tools` is empty
@@ -107,6 +111,21 @@ pub struct ConnectedIntegrationTool {
     /// JSON schema for the action's parameters. `None` when the backend
     /// didn't supply a schema.
     pub parameters: Option<serde_json::Value>,
+}
+
+/// A toolkit action that exists in the catalog but is not currently callable
+/// because the user's configured scope preference for that toolkit does not
+/// permit it.
+#[derive(Debug, Clone)]
+pub struct GatedIntegrationTool {
+    /// Action slug, e.g. `"GMAIL_BATCH_DELETE_MESSAGES"`.
+    pub name: String,
+    /// One-line description of the action.
+    pub description: String,
+    /// Which scope the user must enable for this action to become callable.
+    pub required_scope: String,
+    /// Human-readable settings paths the user can follow to unlock the action.
+    pub unlock_paths: Vec<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

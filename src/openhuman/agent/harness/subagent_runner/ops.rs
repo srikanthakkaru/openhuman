@@ -682,6 +682,7 @@ async fn run_typed_mode(
                     toolkit: cached_integration.toolkit.clone(),
                     description: cached_integration.description.clone(),
                     tools: fresh_actions,
+                    gated_tools: cached_integration.gated_tools.clone(),
                     connected: cached_integration.connected,
                 };
                 let integration = &integration;

@@ -187,6 +187,7 @@ mod tests {
             toolkit: "gmail".into(),
             description: "Email access.".into(),
             tools: Vec::new(),
+            gated_tools: Vec::new(),
             connected: true,
         }];
         let body = build(&ctx_with(&integrations, &[])).unwrap();
@@ -205,6 +206,7 @@ mod tests {
             toolkit: "notion".into(),
             description: "Pages.".into(),
             tools: Vec::new(),
+            gated_tools: Vec::new(),
             connected: false,
         }];
         let body = build(&ctx_with(&integrations, &[])).unwrap();

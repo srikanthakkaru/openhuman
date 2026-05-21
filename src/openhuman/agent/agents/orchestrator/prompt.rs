@@ -172,6 +172,7 @@ mod tests {
             toolkit: "gmail".into(),
             description: "Email access.".into(),
             tools: Vec::new(),
+            gated_tools: Vec::new(),
             connected: true,
         }];
         let body = build(&ctx_with(&integrations)).unwrap();
@@ -192,6 +193,7 @@ mod tests {
             toolkit: "gmail".into(),
             description: "Email access.".into(),
             tools: Vec::new(),
+            gated_tools: Vec::new(),
             connected: true,
         }];
         let body = build(&ctx_with(&integrations)).unwrap();
@@ -213,12 +215,14 @@ mod tests {
                 toolkit: "gmail".into(),
                 description: "Email.".into(),
                 tools: Vec::new(),
+                gated_tools: Vec::new(),
                 connected: true,
             },
             ConnectedIntegration {
                 toolkit: "linear".into(),
                 description: "Tracker.".into(),
                 tools: Vec::new(),
+                gated_tools: Vec::new(),
                 connected: false,
             },
         ];
@@ -233,6 +237,7 @@ mod tests {
             toolkit: "linear".into(),
             description: "Tracker.".into(),
             tools: Vec::new(),
+            gated_tools: Vec::new(),
             connected: false,
         }];
         let body = build(&ctx_with(&integrations)).unwrap();

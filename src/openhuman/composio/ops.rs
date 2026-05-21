@@ -1664,6 +1664,7 @@ async fn fetch_connected_integrations_uncached(
             toolkit: slug.clone(),
             description: toolkit_description(slug).to_string(),
             tools,
+            gated_tools: Vec::new(),
             connected,
         });
     }
