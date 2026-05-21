@@ -47,6 +47,12 @@ const GITHUB_RELEASES_METADATA: Option<CapabilityPrivacy> = Some(CapabilityPriva
     destinations: &["GitHub Releases"],
 });
 
+const SEARXNG_RAW_TO_CONFIGURED_INSTANCE: Option<CapabilityPrivacy> = Some(CapabilityPrivacy {
+    leaves_device: true,
+    data_kind: PrivacyDataKind::Raw,
+    destinations: &["Configured SearXNG instance"],
+});
+
 // Direct-mode Composio: the user's API key and tool arguments leave the
 // device — they are sent to backend.composio.dev, not the OpenHuman backend.
 // LOCAL_CREDENTIALS was incorrect here because leaves_device must be true.
@@ -156,6 +162,16 @@ const CAPABILITIES: &[Capability] = &[
         category: CapabilityCategory::Conversation,
         description: "Show the sequence of tool calls and actions used to answer a request.",
         how_to: "Conversations > Tool timeline",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
+        id: "conversation.subagent_mascots",
+        name: "Subagent Mascots",
+        domain: "conversation",
+        category: CapabilityCategory::Conversation,
+        description: "Show delegated sub-agents as colored companion mascots with compact activity bubbles and running, completed, or failed states.",
+        how_to: "Human > ask the assistant to delegate work to sub-agents",
         status: CapabilityStatus::Beta,
         privacy: None,
     },
@@ -289,6 +305,16 @@ const CAPABILITIES: &[Capability] = &[
         privacy: LOCAL_RAW,
     },
     Capability {
+        id: "intelligence.searxng_search",
+        name: "SearXNG Search",
+        domain: "intelligence",
+        category: CapabilityCategory::Intelligence,
+        description: "Search a configured self-hosted SearXNG instance from agent and MCP tools, returning normalized title, URL, snippet, and source results.",
+        how_to: "Set `[searxng] enabled = true` and `base_url` in config.toml, or use OPENHUMAN_SEARXNG_* environment variables.",
+        status: CapabilityStatus::Beta,
+        privacy: SEARXNG_RAW_TO_CONFIGURED_INSTANCE,
+    },
+    Capability {
         id: "intelligence.tool_registry",
         name: "Tool Registry",
         domain: "intelligence",
@@ -315,6 +341,16 @@ const CAPABILITIES: &[Capability] = &[
         category: CapabilityCategory::Intelligence,
         description: "Backfill the last 6 days of Slack history into the memory tree and keep it up to date by flushing each closed 6-hour UTC bucket. Driven by an authenticated Slack connection (OAuth via Composio).",
         how_to: "Settings > Messaging Channels > Slack",
+        status: CapabilityStatus::Beta,
+        privacy: LOCAL_RAW,
+    },
+    Capability {
+        id: "intelligence.clickup_memory_ingest",
+        name: "ClickUp Memory Ingestion",
+        domain: "intelligence",
+        category: CapabilityCategory::Intelligence,
+        description: "Incrementally sync ClickUp tasks assigned to the authenticated user into the Memory Tree on a 30-minute cadence, with an initial backfill on first connect. Only tasks the user is directly assigned to are ingested. Driven by an authenticated ClickUp connection (OAuth via Composio).",
+        how_to: "Settings > Connections > ClickUp",
         status: CapabilityStatus::Beta,
         privacy: LOCAL_RAW,
     },
@@ -407,6 +443,17 @@ const CAPABILITIES: &[Capability] = &[
         how_to: "Conversations > Ask the assistant to run an Apify actor",
         status: CapabilityStatus::Beta,
         privacy: None,
+    },
+    Capability {
+        id: "skills.tinyfish_web_automation",
+        name: "TinyFish Web Automation",
+        domain: "skills",
+        category: CapabilityCategory::Skills,
+        description:
+            "Search the web, render JavaScript-heavy pages, and run goal-based browser automations through TinyFish.",
+        how_to: "Conversations > Ask the assistant to search, fetch, or automate a website with TinyFish",
+        status: CapabilityStatus::Beta,
+        privacy: DERIVED_TO_BACKEND,
     },
     Capability {
         id: "skills.toggle_enabled",
@@ -911,6 +958,50 @@ const CAPABILITIES: &[Capability] = &[
         privacy: LOCAL_RAW,
     },
     Capability {
+        id: "channels.mcp_registry_browse",
+        name: "Browse MCP Server Registry",
+        domain: "channels",
+        category: CapabilityCategory::Channels,
+        description: "Search and discover MCP servers from the Smithery.ai public registry.",
+        how_to: "Channels > MCP Servers > Browse Registry",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: true,
+            data_kind: PrivacyDataKind::Metadata,
+            destinations: &["Smithery.ai registry API"],
+        }),
+    },
+    Capability {
+        id: "channels.mcp_server_install",
+        name: "Install MCP Servers",
+        domain: "channels",
+        category: CapabilityCategory::Channels,
+        description: "Install MCP servers locally. Required env vars are stored encrypted and never included in logs or responses.",
+        how_to: "Channels > MCP Servers > Install",
+        status: CapabilityStatus::Beta,
+        privacy: LOCAL_CREDENTIALS,
+    },
+    Capability {
+        id: "channels.mcp_server_connect",
+        name: "Connect / Disconnect MCP Servers",
+        domain: "channels",
+        category: CapabilityCategory::Channels,
+        description: "Spawn and manage MCP server subprocesses via the stdio JSON-RPC protocol.",
+        how_to: "Channels > MCP Servers > Connect",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
+        id: "channels.mcp_tool_call",
+        name: "Invoke MCP Server Tools",
+        domain: "channels",
+        category: CapabilityCategory::Channels,
+        description: "Call tools exposed by connected MCP servers. Results are surfaced to the agent.",
+        how_to: "Human > ask the assistant to use a tool from a connected MCP server",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
         id: "settings.configure_ai",
         name: "Configure AI",
         domain: "settings",
@@ -1154,6 +1245,30 @@ const CAPABILITIES: &[Capability] = &[
         how_to: "Settings > Developer Options > Apply Update, or confirm an in-chat update prompt from the orchestrator.",
         status: CapabilityStatus::Beta,
         privacy: GITHUB_RELEASES_METADATA,
+    },
+    // ── Desktop Companion ────────────────────────────────────────────
+    Capability {
+        id: "companion.session",
+        name: "Desktop Companion Session",
+        domain: "desktop_companion",
+        category: CapabilityCategory::ScreenIntelligence,
+        description: "Start a Clicky-style companion session that ties hotkey activation, \
+                      microphone capture, screen context, LLM reasoning, speech synthesis, \
+                      and visual pointing into a single interaction loop.",
+        how_to: "Settings > Companion, or activate via the configured hotkey.",
+        status: CapabilityStatus::Beta,
+        privacy: DERIVED_TO_BACKEND,
+    },
+    Capability {
+        id: "companion.pointing",
+        name: "Visual Pointing",
+        domain: "desktop_companion",
+        category: CapabilityCategory::ScreenIntelligence,
+        description: "The companion LLM can embed [POINT:x,y:label:screenN] tags to \
+                      visually point at UI elements on screen via the overlay.",
+        how_to: "Automatic during companion sessions when the LLM identifies a UI target.",
+        status: CapabilityStatus::Beta,
+        privacy: None,
     },
 ];
 

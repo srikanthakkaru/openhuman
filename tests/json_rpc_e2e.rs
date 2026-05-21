@@ -4817,7 +4817,10 @@ async fn public_paths_accessible_without_token() {
     let base = format!("http://{rpc_addr}");
 
     // Paths that return 200 without any extra params.
-    for path in ["/", "/health", "/schema", "/events/webhooks"] {
+    // `/events/webhooks` was REMOVED from this list when issue #1922 wired
+    // bearer auth onto it (header or `?token=…`). Coverage for that path
+    // lives in the dedicated `webhook_sse_*` tests below.
+    for path in ["/", "/health", "/schema"] {
         let resp = client
             .get(format!("{base}{path}"))
             .send()
@@ -4846,6 +4849,189 @@ async fn public_paths_accessible_without_token() {
             resp.status()
         );
     }
+
+    rpc_join.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Webhook SSE auth (issue #1922) — /events/webhooks now requires bearer auth
+// via either the Authorization header OR a `?token=…` query param. The
+// query-param fallback exists because browser `EventSource` cannot attach
+// custom headers (whatwg/html §10.7). See `QUERY_TOKEN_PATHS` in
+// src/core/auth.rs.
+// ---------------------------------------------------------------------------
+
+/// GET /events/webhooks with neither header nor query token → 401.
+#[tokio::test]
+async fn webhook_sse_rejects_unauthenticated() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    ensure_test_rpc_auth();
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("http://{rpc_addr}/events/webhooks"))
+        .send()
+        .await
+        .expect("request");
+
+    assert_eq!(
+        resp.status(),
+        401,
+        "missing credentials on /events/webhooks must yield 401"
+    );
+    let body: Value = resp.json().await.expect("json body");
+    assert_eq!(body["error"], "unauthorized");
+
+    rpc_join.abort();
+}
+
+/// GET /events/webhooks?token= (empty value) → 401. Defends against
+/// `encodeURIComponent(null)` / `encodeURIComponent("")` mishaps on the FE.
+#[tokio::test]
+async fn webhook_sse_rejects_empty_query_token() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    ensure_test_rpc_auth();
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("http://{rpc_addr}/events/webhooks?token="))
+        .send()
+        .await
+        .expect("request");
+
+    assert_eq!(resp.status(), 401, "empty token value must be 401");
+
+    rpc_join.abort();
+}
+
+/// GET /events/webhooks?token=garbage → 401.
+#[tokio::test]
+async fn webhook_sse_rejects_wrong_query_token() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    ensure_test_rpc_auth();
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let client = reqwest::Client::new();
+
+    let bad = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    assert_ne!(bad, TEST_RPC_TOKEN);
+
+    let resp = client
+        .get(format!("http://{rpc_addr}/events/webhooks?token={bad}"))
+        .send()
+        .await
+        .expect("request");
+
+    assert_eq!(resp.status(), 401, "wrong query token must be 401");
+    let body: Value = resp.json().await.expect("json body");
+    assert_eq!(body["error"], "unauthorized");
+
+    rpc_join.abort();
+}
+
+/// GET /events/webhooks?token=<valid> → 200 (SSE stream opens).
+#[tokio::test]
+async fn webhook_sse_accepts_valid_query_token() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    ensure_test_rpc_auth();
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!(
+            "http://{rpc_addr}/events/webhooks?token={TEST_RPC_TOKEN}"
+        ))
+        .send()
+        .await
+        .expect("request");
+
+    assert_eq!(
+        resp.status(),
+        200,
+        "valid query token must open the SSE stream"
+    );
+    let ct = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.starts_with("text/event-stream"),
+        "expected SSE content-type, got {ct}"
+    );
+
+    rpc_join.abort();
+}
+
+/// GET /events/webhooks with a percent-encoded query token → 200. Locks the
+/// URL-decoding contract `EventSource` callers depend on (the FE uses
+/// `encodeURIComponent`, which percent-encodes reserved characters even
+/// when the token itself is hex-only).
+#[tokio::test]
+async fn webhook_sse_accepts_percent_encoded_query_token() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    ensure_test_rpc_auth();
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let client = reqwest::Client::new();
+
+    let encoded = urlencoding::encode(TEST_RPC_TOKEN);
+    // Sanity: encoding the canonical hex test token must remain a non-empty
+    // string. The encoder may pass-through (hex is URL-safe) — that's fine;
+    // the test still proves the decode path doesn't double-decode or strip.
+    assert!(!encoded.is_empty());
+
+    let resp = client
+        .get(format!("http://{rpc_addr}/events/webhooks?token={encoded}"))
+        .send()
+        .await
+        .expect("request");
+
+    assert_eq!(
+        resp.status(),
+        200,
+        "url-encoded valid query token must open the SSE stream"
+    );
+    let ct = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.starts_with("text/event-stream"),
+        "expected SSE content-type, got {ct}"
+    );
+
+    rpc_join.abort();
+}
+
+/// GET /events/webhooks with `Authorization: Bearer <valid>` → 200.
+/// CLI / non-browser callers should still be able to subscribe the header way.
+#[tokio::test]
+async fn webhook_sse_accepts_valid_bearer_header() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    ensure_test_rpc_auth();
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("http://{rpc_addr}/events/webhooks"))
+        .header(AUTHORIZATION, format!("Bearer {TEST_RPC_TOKEN}"))
+        .send()
+        .await
+        .expect("request");
+
+    assert_eq!(
+        resp.status(),
+        200,
+        "valid Bearer header must open the SSE stream"
+    );
 
     rpc_join.abort();
 }
@@ -5980,4 +6166,286 @@ async fn whatsapp_data_agent_tools_e2e_1341() {
     assert!(WhatsAppDataSearchMessagesTool
         .description()
         .contains("WhatsApp"));
+}
+
+// ---------------------------------------------------------------------------
+// Desktop companion session lifecycle (RPC round-trip)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn companion_session_lifecycle_over_rpc() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    let (mock_addr, mock_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let mock_origin = format!("http://{}", mock_addr);
+    write_min_config(&openhuman_home, &mock_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{}", rpc_addr);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Reset any lingering session from other tests.
+    let _ = post_json_rpc(
+        &rpc_base,
+        100,
+        "openhuman.companion_stop_session",
+        json!({ "reason": "test_reset" }),
+    )
+    .await;
+
+    // ── 1. Status before any session ──
+    let status = post_json_rpc(&rpc_base, 101, "openhuman.companion_status", json!({})).await;
+    let status_r = assert_no_jsonrpc_error(&status, "companion_status (initial)");
+    let result_body = status_r.get("result").unwrap_or(status_r);
+    assert_eq!(
+        result_body.get("active"),
+        Some(&json!(false)),
+        "no session should be active initially: {result_body}"
+    );
+
+    // ── 2. Start without consent → error ──
+    let no_consent = post_json_rpc(
+        &rpc_base,
+        102,
+        "openhuman.companion_start_session",
+        json!({ "consent": false }),
+    )
+    .await;
+    assert_jsonrpc_error(&no_consent, "companion_start_session (no consent)");
+
+    // ── 3. Start with consent → success ──
+    let start = post_json_rpc(
+        &rpc_base,
+        103,
+        "openhuman.companion_start_session",
+        json!({ "consent": true, "ttl_secs": 3600 }),
+    )
+    .await;
+    let start_r = assert_no_jsonrpc_error(&start, "companion_start_session");
+    let start_body = start_r.get("result").unwrap_or(start_r);
+    assert!(
+        start_body.get("session_id").is_some(),
+        "start should return session_id: {start_body}"
+    );
+
+    // ── 4. Status reflects active session ──
+    let status2 = post_json_rpc(&rpc_base, 104, "openhuman.companion_status", json!({})).await;
+    let status2_r = assert_no_jsonrpc_error(&status2, "companion_status (active)");
+    let result2_body = status2_r.get("result").unwrap_or(status2_r);
+    assert_eq!(
+        result2_body.get("active"),
+        Some(&json!(true)),
+        "session should be active: {result2_body}"
+    );
+
+    // ── 5. Duplicate start → error ──
+    let dup = post_json_rpc(
+        &rpc_base,
+        105,
+        "openhuman.companion_start_session",
+        json!({ "consent": true }),
+    )
+    .await;
+    assert_jsonrpc_error(&dup, "companion_start_session (duplicate)");
+
+    // ── 6. Config get ──
+    let config = post_json_rpc(&rpc_base, 106, "openhuman.companion_config_get", json!({})).await;
+    let config_r = assert_no_jsonrpc_error(&config, "companion_config_get");
+    let config_body = config_r.get("result").unwrap_or(config_r);
+    assert!(
+        config_body.get("hotkey").is_some(),
+        "config should have hotkey: {config_body}"
+    );
+
+    // ── 6b. Config set → error (not yet persisted) ──
+    let config_set = post_json_rpc(
+        &rpc_base,
+        116,
+        "openhuman.companion_config_set",
+        json!({ "hotkey": "CmdOrCtrl+Shift+H" }),
+    )
+    .await;
+    assert_jsonrpc_error(&config_set, "companion_config_set (not persisted)");
+
+    // ── 7. Stop session ──
+    let stop = post_json_rpc(
+        &rpc_base,
+        107,
+        "openhuman.companion_stop_session",
+        json!({ "reason": "test_done" }),
+    )
+    .await;
+    let stop_r = assert_no_jsonrpc_error(&stop, "companion_stop_session");
+    let stop_body = stop_r.get("result").unwrap_or(stop_r);
+    assert_eq!(
+        stop_body.get("stopped"),
+        Some(&json!(true)),
+        "session should be stopped: {stop_body}"
+    );
+
+    // ── 8. Status after stop ──
+    let status3 = post_json_rpc(&rpc_base, 108, "openhuman.companion_status", json!({})).await;
+    let status3_r = assert_no_jsonrpc_error(&status3, "companion_status (after stop)");
+    let result3_body = status3_r.get("result").unwrap_or(status3_r);
+    assert_eq!(
+        result3_body.get("active"),
+        Some(&json!(false)),
+        "session should be inactive after stop: {result3_body}"
+    );
+
+    mock_join.abort();
+    rpc_join.abort();
+}
+
+// ── MCP Clients lifecycle ─────────────────────────────────────────────────────
+//
+// Tests the install → installed_list → uninstall flow over real JSON-RPC.
+// We do NOT test connect/tool_call here because that requires a real MCP
+// server subprocess — the `FakeMcpTransport` in `client/mod.rs` covers that
+// path at unit level. The spawn path is guarded behind a trait so tests can
+// inject fakes without touching the filesystem.
+
+#[tokio::test]
+async fn mcp_clients_lifecycle() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    let (mock_addr, mock_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let mock_origin = format!("http://{}", mock_addr);
+    write_min_config(&openhuman_home, &mock_origin);
+    let user_scoped_dir = openhuman_home.join("users").join("local");
+    write_min_config(&user_scoped_dir, &mock_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{}", rpc_addr);
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // ── 1. installed_list should start empty ─────────────────────────────────
+    let list1 = post_json_rpc(
+        &rpc_base,
+        9901,
+        "openhuman.mcp_clients_installed_list",
+        json!({}),
+    )
+    .await;
+    let list1_result = assert_no_jsonrpc_error(&list1, "mcp_clients_installed_list (initial)");
+    // Handlers wrap their value in `{ "result": value, "logs": [...] }` when logs are
+    // emitted (see RpcOutcome::into_cli_compatible_json); unwrap that envelope here.
+    let list1_body = list1_result.get("result").unwrap_or(list1_result);
+    let installed = list1_body
+        .get("installed")
+        .and_then(Value::as_array)
+        .expect("installed_list must return an 'installed' array");
+    assert!(
+        installed.is_empty(),
+        "installed list should start empty: {installed:?}"
+    );
+
+    // ── 2. status should return empty servers ─────────────────────────────────
+    let status1 = post_json_rpc(&rpc_base, 9902, "openhuman.mcp_clients_status", json!({})).await;
+    let status1_result = assert_no_jsonrpc_error(&status1, "mcp_clients_status (initial)");
+    let status1_body = status1_result.get("result").unwrap_or(status1_result);
+    let servers = status1_body
+        .get("servers")
+        .and_then(Value::as_array)
+        .expect("status must return 'servers' array");
+    assert!(servers.is_empty(), "status should start empty: {servers:?}");
+
+    // ── 3. uninstall a non-existent server is a no-op ────────────────────────
+    let uninstall_missing = post_json_rpc(
+        &rpc_base,
+        9903,
+        "openhuman.mcp_clients_uninstall",
+        json!({ "server_id": "00000000-0000-0000-0000-000000000000" }),
+    )
+    .await;
+    // Non-existent id: may return error or removed=false — both are acceptable.
+    // We just verify it does not panic the server.
+    assert!(
+        uninstall_missing.get("result").is_some() || uninstall_missing.get("error").is_some(),
+        "uninstall missing server should return result or error: {uninstall_missing}"
+    );
+
+    // ── 4. registry_search (schema validation — may not have network in CI) ───
+    let search = post_json_rpc(
+        &rpc_base,
+        9904,
+        "openhuman.mcp_clients_registry_search",
+        json!({ "query": "test", "page": 1, "page_size": 5 }),
+    )
+    .await;
+    // Result or error are both acceptable; method must be registered.
+    assert!(
+        search.get("result").is_some() || search.get("error").is_some(),
+        "registry_search should return result or error: {search}"
+    );
+
+    // ── 5. connect on a non-installed server returns an error ─────────────────
+    let connect_missing = post_json_rpc(
+        &rpc_base,
+        9905,
+        "openhuman.mcp_clients_connect",
+        json!({ "server_id": "00000000-0000-0000-0000-000000000001" }),
+    )
+    .await;
+    assert!(
+        connect_missing.get("error").is_some(),
+        "connect on missing server should return error: {connect_missing}"
+    );
+
+    // ── 6. tool_call on a non-connected server returns is_error=true ─────────
+    let tool_call_disconnected = post_json_rpc(
+        &rpc_base,
+        9906,
+        "openhuman.mcp_clients_tool_call",
+        json!({
+            "server_id": "00000000-0000-0000-0000-000000000002",
+            "tool_name": "search",
+            "arguments": {}
+        }),
+    )
+    .await;
+    let tc_result =
+        assert_no_jsonrpc_error(&tool_call_disconnected, "tool_call on disconnected server");
+    let tc_body = tc_result.get("result").unwrap_or(tc_result);
+    assert_eq!(
+        tc_body.get("is_error"),
+        Some(&json!(true)),
+        "tool_call on disconnected server should set is_error=true: {tc_body}"
+    );
+
+    // ── 7. disconnect on a non-connected server is a no-op ────────────────────
+    let disconnect_noop = post_json_rpc(
+        &rpc_base,
+        9907,
+        "openhuman.mcp_clients_disconnect",
+        json!({ "server_id": "00000000-0000-0000-0000-000000000003" }),
+    )
+    .await;
+    let disc_result = assert_no_jsonrpc_error(&disconnect_noop, "disconnect noop");
+    let disc_body = disc_result.get("result").unwrap_or(disc_result);
+    assert_eq!(
+        disc_body.get("status").and_then(Value::as_str),
+        Some("disconnected"),
+        "disconnect noop should return status=disconnected: {disc_body}"
+    );
+
+    mock_join.abort();
+    rpc_join.abort();
 }

@@ -202,6 +202,34 @@ pub enum DomainEvent {
         elapsed_ms: u64,
     },
 
+    // ── Approval ────────────────────────────────────────────────────────
+    /// Agent attempted a tool call that produces an external side
+    /// effect; awaiting user approval. Published by `ApprovalGate`
+    /// before parking the tool-call future. Issue #1339.
+    ApprovalRequested {
+        /// Unique id used to correlate the decision back to the
+        /// parked future.
+        request_id: String,
+        /// Tool name being gated (e.g. `"composio"`, `"pushover"`).
+        tool_name: String,
+        /// Short human-readable summary of the action, redacted of
+        /// PII/secrets/message bodies (counts/shape only).
+        action_summary: String,
+        /// Redacted JSON arguments — also stripped of raw user content.
+        args_redacted: serde_json::Value,
+        /// Session id binding the request to the current core launch
+        /// so stale approvals cannot be replayed after restart.
+        session_id: String,
+    },
+    /// User decided a pending approval. Published by `approval_decide`
+    /// RPC handler after the gate's parked future resolves.
+    ApprovalDecided {
+        request_id: String,
+        tool_name: String,
+        /// `"approve_once"`, `"approve_always_for_tool"`, or `"deny"`.
+        decision: String,
+    },
+
     // ── Webhooks ────────────────────────────────────────────────────────
     /// An incoming webhook request from the transport layer, ready for routing.
     WebhookIncomingRequest {
@@ -415,6 +443,43 @@ pub enum DomainEvent {
         rebuilt_at: f64,
     },
 
+    // ── Desktop Companion ──────────────────────────────────────────────
+    /// A desktop companion session was started.
+    CompanionSessionStarted { session_id: String, ttl_secs: u64 },
+    /// The companion transitioned to a new state.
+    CompanionStateChanged {
+        session_id: String,
+        state: String,
+        previous_state: String,
+    },
+    /// A desktop companion session ended.
+    CompanionSessionEnded {
+        session_id: String,
+        reason: String,
+        turn_count: usize,
+    },
+
+    // ── MCP Clients ─────────────────────────────────────────────────────
+    /// A new MCP server was installed from the Smithery registry.
+    McpServerInstalled {
+        server_id: String,
+        qualified_name: String,
+    },
+    /// An MCP server subprocess connected and completed the initialize handshake.
+    McpServerConnected { server_id: String, tool_count: u32 },
+    /// An MCP server subprocess was disconnected or terminated.
+    McpServerDisconnected {
+        server_id: String,
+        reason: Option<String>,
+    },
+    /// An MCP client tool was invoked.
+    McpClientToolExecuted {
+        server_id: String,
+        tool_name: String,
+        success: bool,
+        elapsed_ms: u64,
+    },
+
     // ── System lifecycle ────────────────────────────────────────────────
     /// A system component started up.
     SystemStartup { component: String },
@@ -511,6 +576,10 @@ impl DomainEvent {
 
             Self::NotificationIngested { .. } | Self::NotificationTriaged { .. } => "notification",
 
+            Self::CompanionSessionStarted { .. }
+            | Self::CompanionStateChanged { .. }
+            | Self::CompanionSessionEnded { .. } => "companion",
+
             Self::SystemStartup { .. }
             | Self::SystemShutdown { .. }
             | Self::SystemRestartRequested { .. }
@@ -519,6 +588,13 @@ impl DomainEvent {
             | Self::HealthRestarted { .. } => "system",
 
             Self::SessionExpired { .. } => "auth",
+
+            Self::ApprovalRequested { .. } | Self::ApprovalDecided { .. } => "approval",
+
+            Self::McpServerInstalled { .. }
+            | Self::McpServerConnected { .. }
+            | Self::McpServerDisconnected { .. }
+            | Self::McpClientToolExecuted { .. } => "mcp_client",
         }
     }
 }
